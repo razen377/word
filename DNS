@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#
+# Script rapide pour activer allow-update (sans clé) + ajouter CNAME bob
+# À lancer en root sur Debian/Ubuntu avec BIND9 déjà installé
+# Attention : allow-update { 127.; } est DANGEREUX sur Internet → à restreindre après tests !
+
+set -euo pipefail
+
+# Variables (à adapter si besoin)
+DOMAIN="bob.tech.lan"               # ← change ici si tu utilises un autre domaine
+IP_SERVER="$(hostname -I | awk '{print $1}')"   # IP principale de la machine
+
+ZONE_FILE="/var/lib/bind/db.${DOMAIN}"
+CONF_LOCAL="/etc/bind/named.conf.local"
+
+# Vérification root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Ce script doit être lancé en root (sudo)."
+    exit 1
+fi
+
+echo "Configuration BIND9 pour ${DOMAIN}"
+echo "IP détectée : ${IP_SERVER}"
+echo
+
+# 1. Création / mise à jour de la zone dans named.conf.local
+if ! grep -q "zone \"${DOMAIN}\"" "${CONF_LOCAL}"; then
+    echo "Ajout de la zone ${DOMAIN} dans ${CONF_LOCAL}..."
+    cat >> "${CONF_LOCAL}" <<EOF
+
+zone "${DOMAIN}" {
+    type master;
+    file "${ZONE_FILE}";
+    allow-update { 127.0.0.1; };          # ← Mises à jour dynamiques ouvertes (INSECURE !)
+    # Version plus sûre après tests : allow-update { localhost; 192.168.146.0/24; };
+    allow-transfer { none; };
+    notify no;
+};
+EOF
+else
+    echo "La zone ${DOMAIN} existe déjà dans ${CONF_LOCAL}"
+fi
+
+# 2. Création ou mise à jour du fichier de zone avec CNAME bob
+echo "Création/mise à jour du fichier de zone ${ZONE_FILE}..."
+
+cat > "${ZONE_FILE}" <<EOF
+\$TTL 604800
+@       IN      SOA     ns.${DOMAIN}. root.${DOMAIN}. (
+                              2         ; Serial   (augmenté pour forcer rechargement)
+                         604800         ; Refresh
+                          86400         ; Retry
+                        2419200         ; Expire
+                         604800 )       ; Negative Cache TTL
+;
+@               IN      NS      ns.${DOMAIN}.
+@               IN      MX  10  mail.${DOMAIN}.
+
+ns              IN      A       ${IP_SERVER}
+mail            IN      A       ${IP_SERVER}
+@               IN      A       ${IP_SERVER}
+
+; CNAME ajouté automatiquement par ce script
+bob             IN      CNAME   @           ; bob.${DOMAIN} → pointe sur ${IP_SERVER}
+
+; Autres enregistrements que tu peux ajouter dynamiquement avec nsupdate :
+; camera          IN      A       192.168.1.55
+; phone           IN      A       192.168.146.77
+EOF
+
+# 3. Permissions correctes (BIND doit pouvoir écrire les fichiers .jnl)
+chown bind:bind "${ZONE_FILE}"
+chmod 664 "${ZONE_FILE}"
+chown bind:bind /var/lib/bind
+chmod 775 /var/lib/bind
+
+# 4. Vérification syntaxe
+echo "Vérification de la zone..."
+if named-checkzone "${DOMAIN}" "${ZONE_FILE}"; then
+    echo "[OK] Zone valide"
+else
+    echo "[ERREUR] Problème dans la zone - voir ci-dessus"
+    exit 1
+fi
+
+# 5. Rechargement BIND
+echo "Rechargement de BIND9..."
+rndc reload "${DOMAIN}" 2>/dev/null || systemctl reload bind9 || systemctl restart bind9
+
+sleep 2
+
+# 6. Vérification finale
+if systemctl is-active --quiet bind9; then
+    echo "[OK] BIND9 est actif"
+else
+    echo "[ERREUR] BIND9 ne fonctionne pas"
+    journalctl -u bind9 -n 40 --no-pager | grep -iE "error|fail|zone|syntax"
+    exit 1
+fi
+
+# 7. Test résolution
+echo
+echo "Tests de résolution :"
+echo "  ${DOMAIN}     → $(dig +short @127.0.0.1 ${DOMAIN})"
+echo "  bob.${DOMAIN} → $(dig +short @127.0.0.1 bob.${DOMAIN})"
+echo
+
+echo "Terminé !"
+echo
+echo "Exemple d'ajout dynamique avec nsupdate :"
+echo "nsupdate <<FIN"
+echo "server 127.0.0.1"
+echo "zone ${DOMAIN}"
+echo "update add test.${DOMAIN} 300 A 192.168.146.50"
+echo "send"
+echo "FIN"
+echo
+echo "Attention sécurité : change allow-update { any; } dès que tes tests sont terminés !"
+
+exit 0
