@@ -77,6 +77,6 @@ sed -i "s/password_here/${pass}/" ${user}/wp-config.php
 
 # Fin de l'installation
 mail ${user}@tech.lan -s "Votre site Wordpress" << EOF
-L'installation de votre site wordpress est terminée et doit être finalisée sur https://${user}.jerome.lan.
+L'installation de votre site wordpress est terminée et doit être finalisée sur https://${user}.tech.lan.
 Cordialement,
 EOF
