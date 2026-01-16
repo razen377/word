@@ -23,7 +23,7 @@ mv wordpress /var/www/$user
 # On se déplace dans /var/www
 cd /var/www
 # Changement propriétaire wordpress
-chown -R $user:user $user/
+chown -R $user:$user $user/
 
 # Ecriture du virtual host Apache
 cat > /etc/apache2/sites-available/$user.conf << EOF
