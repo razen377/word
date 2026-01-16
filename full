@@ -1,0 +1,230 @@
+#!/bin/bash
+#
+IP_MACHINE=$(hostname -I | awk '{print $1}')
+INTERFACE=$(ip route | grep "default" | awk '{print $5}')
+GATEWAY=$(ip route | grep "default" | awk '{print $3}')
+user="bob"
+pass="secret123"
+#
+sed -e
+#
+echo "Configuration du Réseau"
+cat > /etc/network/interfaces <<EOF
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+
+allow-hotplug $INTERFACE
+iface $INTERFACE inet static
+	address $IP_MACHINE
+	gateway $GATEWAY
+	netmash 255.255.255.0
+	nameservems 127.0.0.1 1.1.1.1
+EOF
+echo "Création du l'utilisateur $user"
+useradd $user -m -s /bin/bash
+echo $user:$pass | chpasswd 2>/dev/null
+echo
+echo "Mise à Jour du Système"
+apt update && apt upgrade -y -q 2>/dev/null
+echo
+echo "Installation unzip, zip, bind9, resolvconf & debconf-utils"
+apt install unzip zip bind9 resolvconf debconf-utils -y -q 2>/dev/null
+echo
+echo "Configuration de named.conf.local"
+cat > /etc/bind/named.conf.local <<EOF
+zone "wordpress.admin.lan" {
+	type master;
+	file "var/lib/bind9/db.$user.admin.lan";
+};
+EOF
+echo
+echo "Configuration de db.$user.admin.lan"
+cat > /var/lib/bind/db.admin.lan << EOF
+$TTL	604800
+@	IN	SOA	ns.admin.lan.	root.$user.admin.lan. (
+				    1		; Serial
+			       604800		; Refresh
+			        86400		; Retry
+			      2419200		; Expire
+			       604800 ) 	; Negative Cache TTL
+;
+
+@	  IN	NS	ns.$user.admin.lan.
+@	  IN	MX	10 mail.$user.admin.lan.
+ns	  IN	A	$IP_MACHINE
+mail	  IN	A	$IP_MACHINE
+www	  IN 	A	$IP_MACHINE
+EOF
+echo
+echo "Relancer bind9"
+systemctl restart bind9
+echo
+echo "Configuration de resolvconf"
+cat > /etc/resolvconf/resolv.conf.d/head <<EOF
+nameserver 127.0.0.1
+EOF
+echo "Configuration du fichier Hosts en Failover"
+sed -i '/wordpress.admin.lan/d' /etc/hosts
+echo "127.0.0.1 wordpress.admin.lan mail.wordpress.admin.lan" >> /etc/hosts
+echo
+echo "Installation LAMP"
+apt install apache2 php mariadb-server -y -q 2>/dev/null
+echo
+echo "PréConfiguration de phpMyAdmin"
+echo "phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2" | debconf-set-selections
+echo "phpmyadmin phpmyadmin/dbconfig-install boolean true" | debconf-set-selections
+echo "phpmyadmin phpmyadmin/mysql/app-pass password" | debconf-set-selections
+echo "phpmyadmin phpmyadmin/app-password-confirm password" | debconf-set-selections
+echo
+echo "Installation phpMyAdmin"
+apt install phpmyadmin -y -q 2>/dev/null
+echo
+echo "Installation openssl"
+apt install openssl -y -q 2>/dev/null
+echo
+echo "Déplacement dans /etc/apache2"
+cd /etc/apache2
+echo
+echo "Générer le certificat SSL"
+openssl req -x509 -nodes -days 365 -new -keyout apache.key -out apache.pem <<EOF
+FR
+France
+Loir-Et-Cher
+Skolae
+/
+$user.admin.lan
+admin@$user.admin.lan
+EOF
+echo
+echo "Déplacement dans /tmp"
+cd /tmp
+echo
+echo "Installation Wordpress Latest"
+wget -q https://fr.wordpress.org/latest-fr_FR.zip
+unzip -q -o latest-fr_FR.zip
+rm latest-fr_FR.zip
+echo
+echo "Installation de wordpress pour l'utilisateur"
+mv wordpress /var/www/$user
+echo
+echo "Enable Rewrite & SSL"
+a2enmod rewrite
+a2enmod ssl
+echo
+echo "Créer un VirtualHost:80"
+cat > /etc/apache2/sites-available/$user.conf <<EOF
+<VirtualHost *:80>
+	ServerName $user.admin.lan
+	DocumentRoot /var/www/$user
+	<Directory /var/www/$user>
+		AllowOverride All
+		Require all granted
+	</Directory>
+
+        RewriteEngine On
+        RewriteCond %{HTTPS} off
+        RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI}
+</VirtualHost>
+EOF
+echo
+echo "Créer un VirtualHost:443"
+cat > /etc/apache2/sites-available/$user-ssl.conf <<EOF
+<VirtualHost *:443>
+        ServerName $user.admin.lan
+        DocumentRoot /var/www/$user
+        <Directory /var/www/$user>
+                AllowOverride All
+		Require all granted
+        </Directory>
+
+	SSLEngine On
+        SSLCertificateFile      /etc/apache2/apache.pem
+        SSLCertificateKeyFile   /etc/apache2/apache.key
+</VirtualHost>
+EOF
+echo
+echo "Activation des .conf"
+a2ensite $user.conf 2>/dev/null
+a2ensite $user-ssl.conf 2>/dev/null
+echo
+echo "Création de la DB Wordpress"
+mariadb <<EOF
+CREATE DATABASE IF NOT EXISTS $user;
+CREATE USER IF NOT EXISTS  $user@localhost IDENTIFIED BY "$pass";
+GRANT ALL PRIVILEGES ON $user.* TO $user@localhost;
+FLUSH PRIVILEGES;
+EOF
+echo
+echo "Déplacement dans /var/www/$user"
+cd /var/www/$user
+echo
+echo "Copie du fichier wp-config-sample.php"
+cp wp-config-sample.php wp-config.php
+echo
+echo "Configuration du fichier wp-config.php"
+sed -i 's/database_name_here/wordpress/g' wp-config.php
+sed -i 's/username_here/wordpress/g' wp-config.php
+sed -i 's/password_here/secret/g' wp-config.php
+echo
+echo "Donner les permissions à www-data"
+chown -R www-data:www-data /var/www/$user
+chmod -R 755 /var/www/$user
+echo
+echo "Recharger apache2"
+systemctl restart apache2
+echo
+echo "PréConfiguration de Exim4"
+echo "exim4-config exim4/dc_eximconfig_configtype select internet" | debconf-set-selections
+echo "exim4-config exim4/mailname string wordpress.admin.lan" | debconf-set-selections
+echo "exim4-config exim4/dc_local_interfaces string ''" | debconf-set-selections
+echo "exim4-config exim4/dc_other_hostnames string wordpress.admin.lan" | debconf-set-selections
+echo "exim4-config exim4/dc_relay_nets string 127.0.0.0/8;$IP_MACHINE/24" | debconf-set-selections
+echo
+echo "Installation Exim4"
+apt install exim4 -y -q 2>/dev/null
+echo
+echo "Configuration de exim4.conf.localmacros"
+cat > /etc/exim4/exim4.conf.localmacros <<EOF
+ROUTER_DNSLOOKUP_IGNORE_TARGET_HOSTS = 1
+EOF
+echo
+echo " Recharger Exim4"
+systemctl restart exim4
+echo
+echo "Installation Dovecot"
+apt install dovecot-imapd -y -q 2>/dev/null
+echo
+echo "PréConfiguration Roundcube"
+echo "roundcube-core roundcube/dbconfig-install boolean true" | debconf-set-selections
+echo "roundcube-core roundcube/database-type select mysql" | debconf-set-selections
+echo "roundcube-core roundcube/mysql/app-pass password" | debconf-set-selections
+echo "roundcube-core roundcube/app-password-confirm password" | debconf-set-selections
+echo
+echo "Installation Roundcube"
+apt install roundcube roundcube-mysql -y -q 2>/dev/null
+echo "Configuration de roundcube.conf"
+sed -i 's|# Alias /roundcube|Alias /roundcube|g' /etc/apache2/conf-available/roundcube.conf
+echo
+echo "Activation du .conf"
+a2enconf roundcube 2>/dev/null
+echo
+echo "Recharger apache2"
+systemctl restart apache2
+echo
+echo "Configuration de config.inc.php"
+sed -i "s|^\$config\['smtp_host'\].*|\$config['smtp_host'] = 'localhost:25';|" /etc/roundcube/config.inc.php
+sed -i "s|^\$config\['smtp_user'\].*|\$config['smtp_user'] = '';|" /etc/roundcube/config.inc.php
+sed -i "s|^\$config\['smtp_pass'\].*|\$config['smtp_pass'] = '';|" /etc/roundcube/config.inc.php
+echo
+echo "--------------------------------------------------------------------"
+echo "Installation effectué avec succès !"
+echo "--------------------------------------------------------------------"
+echo "Wordpress : https://$user.admin.lan"
+echo "Roundcube : https://$user.admin.lan/roundcube"
+echo "Identifiants Mail : $logname / ton_mot_de_passe-de-ta-machine"
+mail $logname@$user.admin.lan <<EOF
+L'installation de Wordpress est terminée pour finaliser le processus rendez-vous sur https://$user.admin.lan
+L'installation de Roundcue est terminée pour y accéder rendez-vous sur https://$user.admin.lan/roundcube
+EOF
