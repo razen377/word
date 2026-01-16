@@ -387,7 +387,23 @@ echo "Attention sécurité : change allow-update { any; } dès que tes tests son
 
 exit 0
 
-echo "Alias /roundcube /var/lib/roundcube/public_html" >> /etc/apache2/conf-available/roundcube.conf
+FILE="/etc/apache2/conf-available/roundcube.conf"
+
+if [ -f "$FILE" ]; then
+    # Création d'une sauvegarde (.bak)
+    sudo cp "$FILE" "${FILE}.bak"
+    
+    # Décommenter la ligne
+    sudo sed -i 's/^#\s*Alias \/roundcube/Alias \/roundcube/' "$FILE"
+    
+    # Redémarrer Apache pour appliquer les changements
+    sudo systemctl reload apache2
+    
+    echo "La ligne a été décommentée et Apache a été rechargé."
+else
+    echo "Erreur : Le fichier $FILE est introuvable."
+fi
+
 echo systemctl reload apache2
 ──────────────────────────────────────────────────────────────
                 Installation terminée - $(date '+%Y-%m-%d %H:%M')
