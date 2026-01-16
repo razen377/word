@@ -334,9 +334,6 @@ mail            IN      A       ${IP_SERVER}
 ; CNAME ajouté automatiquement par ce script
 bob             IN      CNAME   @           ; bob.${DOMAIN} → pointe sur ${IP_SERVER}
 
-; Autres enregistrements que tu peux ajouter dynamiquement avec nsupdate :
-; camera          IN      A       192.168.1.55
-; phone           IN      A       192.168.146.77
 EOF
 
 # 3. Permissions correctes (BIND doit pouvoir écrire les fichiers .jnl)
@@ -390,6 +387,8 @@ echo "Attention sécurité : change allow-update { any; } dès que tes tests son
 
 exit 0
 
+echo "Alias /roundcube /var/lib/roundcube/public_html" | sudo tee /etc/apache2/conf-available/roundcube.conf
+echo systemctl reload apache2
 ──────────────────────────────────────────────────────────────
                 Installation terminée - $(date '+%Y-%m-%d %H:%M')
 ──────────────────────────────────────────────────────────────
