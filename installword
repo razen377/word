@@ -75,9 +75,9 @@ sed -i "s/username_here/${user}/" ${user}/wp-config.php
 sed -i "s/password_here/${pass}/" ${user}/wp-config.php
 
 nsupdate << EOF
-serveur 127.0.0.1
+server 127.0.0.1
 zone tech.lan
-update add ${user}.tech.lan 604800 in cname debian.jerome.lan
+update add ${user}.tech.lan 604800 in cname debian.tech.lan
 send
 EOF
 
