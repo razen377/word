@@ -387,7 +387,7 @@ echo "Attention sécurité : change allow-update { any; } dès que tes tests son
 
 exit 0
 
-echo "Alias /roundcube /var/lib/roundcube/public_html" | sudo tee /etc/apache2/conf-available/roundcube.conf
+echo "Alias /roundcube /var/lib/roundcube/public_html" >> /etc/apache2/conf-available/roundcube.conf
 echo systemctl reload apache2
 ──────────────────────────────────────────────────────────────
                 Installation terminée - $(date '+%Y-%m-%d %H:%M')
