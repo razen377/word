@@ -31,7 +31,7 @@ cd woordpress /var/www/$user
 chown -R www-data:www-data $user/ 
 
 echo "1/2 - Création du VirtualHost HTTP (Redirection)"
-cat < /etc/apache2/sites-available/$user.conf
+cat > /etc/apache2/sites-available/$user.conf
 <VirtualHost *:80>
 ServerName $user.tech.lan
 DocumentRoot /var/www/$user
@@ -46,7 +46,7 @@ RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 EOF
 
 echo "2/2 - Création du VirtualHost HTTPS (SSL)"
-cat < /etc/apache2/sites-available/${user}-ssl.conf
+cat > /etc/apache2/sites-available/${user}-ssl.conf
 <VirtualHost *:443>
 ServerName $user.tech.lan
 ServerAdmin tech@tech.lan
