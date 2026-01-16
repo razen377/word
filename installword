@@ -23,7 +23,7 @@ mv wordpress /var/www/$user
 # On se déplace dans /var/www
 cd /var/www
 # Changement propriétaire wordpress
-chown -R www-data:www-data $user/
+chown -R $user:user $user/
 
 # Ecriture du virtual host Apache
 cat > /etc/apache2/sites-available/$user.conf << EOF
@@ -77,6 +77,10 @@ sed -i "s/password_here/${pass}/" ${user}/wp-config.php
 
 # Fin de l'installation
 mail ${user}@tech.lan -s "Votre site Wordpress" << EOF
+Bonjour,
 L'installation de votre site wordpress est terminée et doit être finalisée sur https://${user}.tech.lan.
 Cordialement,
+Vous avez accés a vos mails sur htpps://${user}.tech.lan/rondcube et a votre base de données sur https://${user}.tech.lan/phpmyadmin
+login $user
+mot de passe $pass
 EOF
