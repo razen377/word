@@ -1,5 +1,12 @@
 #!/bin/bash
 
+user="bob"
+pass"robert"
+useradd $user
+echo $user:$pass | chpasswd2 2>/dev/null
+
+
+
 echo "Mise à jour et installation des paquets..."
 export DEBIAN_FRONTEND=noninteractive
 apt update && apt upgrade -y
