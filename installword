@@ -1,7 +1,7 @@
 #!/bin/bash
 
-user="bob"
-pass="robert"
+user="alice"
+pass="jose"
 
 useradd $user -m -s /bin/bash
 echo $user:$pass | chpasswd 2>/dev/null
