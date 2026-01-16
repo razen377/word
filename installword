@@ -14,13 +14,28 @@ apt install -y apache2 mariadb-server php libapache2-mod-php php-mysql
 curl unzip bind9 exim4 dovecot-imapd roundcube phpmyadmin openssl mutt mailutils
 echo
 
+
+echo "Téléchargement et installation de Wordpress..."
+cd /tmp
+rm -f latest-fr_FR.zip
+wget -q https://fr.wordpress.org/latest-fr_FR.zip
+unzip -q -o latest-fr_FR.zip
+
+#On renomme le dossier wordpress en wordpress_tech pour correspondre au Vhost
+mw wordpress /var/www/$user
+
+# DEplacement dans l'itillisateur
+mv woordpress /var/www/$user
+
+#Cahngement propriétaire wordpress
+chown -R www-data:www-data $user/ 
+
 echo "1/2 - Création du VirtualHost HTTP (Redirection)"
-cat < /etc/apache2/sites-available/wordpress_tech.conf
+cat < /etc/apache2/sites-available/$user.conf
 <VirtualHost *:80>
-ServerName wordpress.tech.lan
-ServerAdmin tech@tech.lan
-DocumentRoot /var/www/wordpress_tech
-<Directory /var/www/wordpress_tech>
+ServerName $user.tech.lan
+DocumentRoot /var/www/$user
+<Directory /var/www/$user>
 AllowOverride All
 Require all granted
 
@@ -31,12 +46,12 @@ RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 EOF
 
 echo "2/2 - Création du VirtualHost HTTPS (SSL)"
-cat < /etc/apache2/sites-available/wordpress_tech-ssl.conf
+cat < /etc/apache2/sites-available/${user}-ssl.conf
 <VirtualHost *:443>
-ServerName wordpress.tech.lan
+ServerName $user.tech.lan
 ServerAdmin tech@tech.lan
-DocumentRoot /var/www/wordpress_tech
-<Directory /var/www/wordpress_tech>
+DocumentRoot /var/www/$user
+<Directory /var/www/$user>
 Options Indexes FollowSymLinks
 AllowOverride All
 Require all granted
@@ -50,7 +65,7 @@ echo
 
 echo "Activation des sites et modules Apache..."
 a2enmod ssl rewrite > /dev/null
-a2ensite wordpress_tech.conf wordpress_tech-ssl.conf > /dev/null
+a2ensite $user.conf ${user}-ssl.conf > /dev/null
 a2dissite 000-default.conf > /dev/null
 ln -sf /etc/roundcube/apache.conf /etc/apache2/conf-available/roundcube.conf
 a2enconf roundcube phpmyadmin > /dev/null
@@ -58,31 +73,19 @@ echo
 
 echo "Création de la base de données MariaDB..."
 mariadb <<EOF
-CREATE DATABASE IF NOT EXISTS tech_db;
-CREATE USER IF NOT EXISTS 'tech'@'localhost' IDENTIFIED BY "tech$";
-GRANT ALL PRIVILEGES ON tech_db.* TO 'tech'@'localhost';
+CREATE DATABASE IF NOT EXISTS $user;
+CREATE USER IF NOT EXISTS ${user}@localhost IDENTIFIED BY "$pass";
+GRANT ALL PRIVILEGES ON ${user}.* TO $user@localhost;
 FLUSH PRIVILEGES;
 EOF
 echo
 
-echo "Téléchargement et installation de Wordpress..."
-cd /var/www
-rm -f latest-fr_FR.zip
-wget -q https://fr.wordpress.org/latest-fr_FR.zip
-unzip -q -o latest-fr_FR.zip
-
-On renomme le dossier wordpress en wordpress_tech pour correspondre au Vhost
-rm -rf wordpress_tech
-mv wordpress wordpress_tech
-rm -f latest-fr_FR.zip
-echo
-
 echo "Configuration de Wordpress avec SED..."
-cd /var/www/wordpress_tech
+cd /var/www/${user}
 cp wp-config-sample.php wp-config.php
-sed -i 's/database_name_here/tech_db/g' wp-config.php
-sed -i 's/username_here/tech/g' wp-config.php
-sed -i 's/password_here/tech$/g' wp-config.php
+sed -i "s/database_name_here/${user}/" wp-config.php
+sed -i "s/username_here/${user}/" wp-config.php
+sed -i "s/password_here/${pass}/" wp-config.php
 
 Permissions
 chown -R www-data:www-data /var/www/wordpress_tech
@@ -91,8 +94,8 @@ chmod -R 755 /var/www/wordpress_tech
 Fin de l'installation et envoi du mail
 echo "📧 Envoi du mail récapitulatif..."
 
-mail tech@tech.lan -s "Votre site Wordpress" << EOF
-L'installation de votre site wordpress est terminée et doit être finalisée sur https://wordpress.tech.lan.
+mail ${user}@tech.lan -s "Votre site Wordpress" << EOF
+L'installation de votre site wordpress est terminée et doit être finalisée sur https://${user}.tech.lan.
 Cordialement,
 L'administrateur Tech.
 EOF
