@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+#
+# Script d'installation LAMP + WordPress + DNS local + mail + Roundcube
+# Pour Debian 12 / 13 (Bookworm / Trixie)
+# À lancer en root :   sudo ./install.sh
+#
+# Dernière mise à jour : janvier 2026
+
+set -euo pipefail
+
+# ────────────────────────────────────────────────
+# Variables principales
+# ────────────────────────────────────────────────
+
+IP_MACHINE=$(hostname -I | awk '{print $1}')
+INTERFACE=$(ip route show default | awk '{print $5; exit}')
+GATEWAY=$(ip route show default | awk '{print $3; exit}')
+
+USER="bob"
+PASS="secret123"
+DOMAIN="wordpress.admin.lan"
+
+# Couleurs pour l'affichage
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
+echo_error() { echo -e "${RED}[ERREUR]${NC} $*" >&2; }
+
+# ────────────────────────────────────────────────
+# Vérification root (version portable)
+# ────────────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo_error "Ce script doit être exécuté en root (sudo)."
+    exit 1
+fi
+
+echo "──────────────────────────────────────────────────────────────"
+echo " Début de l'installation - $(date '+%Y-%m-%d %H:%M')"
+echo " IP détectée     : $IP_MACHINE"
+echo " Interface       : $INTERFACE"
+echo " Passerelle      : $GATEWAY"
+echo " Domaine         : $DOMAIN"
+echo " Utilisateur WP  : $USER / $PASS"
+echo "──────────────────────────────────────────────────────────────"
+echo
+
+# ────────────────────────────────────────────────
+# Configuration réseau statique
+# ────────────────────────────────────────────────
+echo "Configuration réseau (/etc/network/interfaces)..."
+cat > /etc/network/interfaces <<EOF
+# Généré par script d'installation - $(date '+%Y-%m-%d')
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+
+allow-hotplug $INTERFACE
+iface $INTERFACE inet static
+    address $IP_MACHINE
+    netmask 255.255.255.0
+    gateway $GATEWAY
+    dns-nameservers 127.0.0.1 1.1.1.1
+EOF
+
+# ────────────────────────────────────────────────
+# Création utilisateur
+# ────────────────────────────────────────────────
+echo "Création utilisateur $USER..."
+if ! id "$USER" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash "$USER"
+    echo "$USER:$PASS" | chpasswd
+    echo_ok "Utilisateur $USER créé"
+else
+    echo "Utilisateur $USER existe déjà"
+fi
+
+# ────────────────────────────────────────────────
+# Mise à jour + paquets de base
+# ────────────────────────────────────────────────
+echo "Mise à jour système..."
+apt update -qq && apt full-upgrade -y -qq
+
+echo "Installation paquets nécessaires..."
+apt install -y -qq \
+    unzip zip curl wget \
+    bind9 bind9utils bind9-doc \
+    resolvconf debconf-utils \
+    apache2 php php-mysql php-curl php-gd php-mbstring php-xml php-zip libapache2-mod-php \
+    mariadb-server \
+    openssl
+
+# ────────────────────────────────────────────────
+# BIND9 - Zone wordpress.admin.lan
+# ────────────────────────────────────────────────
+echo "Configuration BIND9..."
+mkdir -p /var/lib/bind
+
+cat > /etc/bind/named.conf.local <<EOF
+zone "$DOMAIN" {
+    type master;
+    file "/var/lib/bind/db.$DOMAIN";
+    allow-update { none; };
+};
+EOF
+
+cat > "/var/lib/bind/db.$DOMAIN" <<EOF
+\$TTL 604800
+@       IN      SOA     ns.$DOMAIN. root.$DOMAIN. (
+                              1         ; Serial
+                         604800         ; Refresh
+                          86400         ; Retry
+                        2419200         ; Expire
+                         604800 )       ; Negative Cache TTL
+;
+@               IN      NS      ns.$DOMAIN.
+@               IN      MX  10  mail.$DOMAIN.
+
+ns              IN      A       $IP_MACHINE
+mail            IN      A       $IP_MACHINE
+www             IN      A       $IP_MACHINE
+@               IN      A       $IP_MACHINE
+EOF
+
+chown bind:bind "/var/lib/bind/db.$DOMAIN"
+chmod 644 "/var/lib/bind/db.$DOMAIN"
+
+systemctl restart bind9
+if systemctl is-active --quiet bind9; then
+    echo_ok "BIND9 fonctionne"
+else
+    echo_error "BIND9 ne démarre pas - vérifiez journalctl -u bind9"
+    exit 1
+fi
+
+# ────────────────────────────────────────────────
+# Résolution DNS locale
+# ────────────────────────────────────────────────
+echo "nameserver 127.0.0.1" > /etc/resolvconf/resolv.conf.d/head
+resolvconf -u 2>/dev/null || true
+
+# Fallback /etc/hosts
+sed -i '/'"$DOMAIN"'/d' /etc/hosts 2>/dev/null
+echo "127.0.0.1   $DOMAIN www.$DOMAIN mail.$DOMAIN" >> /etc/hosts
+
+# ────────────────────────────────────────────────
+# phpMyAdmin
+# ────────────────────────────────────────────────
+echo "Installation phpMyAdmin..."
+echo "phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2"          | debconf-set-selections
+echo "phpmyadmin phpmyadmin/dbconfig-install boolean true"                     | debconf-set-selections
+echo "phpmyadmin phpmyadmin/mysql/app-pass password $PASS"                     | debconf-set-selections
+echo "phpmyadmin phpmyadmin/app-password-confirm password $PASS"               | debconf-set-selections
+
+DEBIAN_FRONTEND=noninteractive apt install -y -qq phpmyadmin
+
+# ────────────────────────────────────────────────
+# Certificat SSL auto-signé
+# ────────────────────────────────────────────────
+echo "Génération certificat SSL (365 jours)..."
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/ssl/private/apache-selfsigned.key \
+    -out /etc/ssl/certs/apache-selfsigned.crt \
+    -subj "/C=FR/ST=Centre-Val de Loire/L=Loir-et-Cher/O=Skolae/OU=Admin/CN=$DOMAIN/emailAddress=admin@$DOMAIN" \
+    2>/dev/null
+
+# ────────────────────────────────────────────────
+# Apache - modules + VirtualHosts
+# ────────────────────────────────────────────────
+a2enmod rewrite ssl headers
+
+cat > "/etc/apache2/sites-available/$USER.conf" <<EOF
+<VirtualHost *:80>
+    ServerName $DOMAIN
+    DocumentRoot /var/www/$USER
+
+    <Directory /var/www/$USER>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${USER}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${USER}-access.log combined
+
+    RewriteEngine On
+    RewriteCond %{HTTPS} off
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</VirtualHost>
+EOF
+
+cat > "/etc/apache2/sites-available/$USER-ssl.conf" <<EOF
+<VirtualHost *:443>
+    ServerName $DOMAIN
+    DocumentRoot /var/www/$USER
+
+    <Directory /var/www/$USER>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    SSLEngine on
+    SSLCertificateFile /etc/ssl/certs/apache-selfsigned.crt
+    SSLCertificateKeyFile /etc/ssl/private/apache-selfsigned.key
+
+    ErrorLog \${APACHE_LOG_DIR}/${USER}-ssl-error.log
+    CustomLog \${APACHE_LOG_DIR}/${USER}-ssl-access.log combined
+</VirtualHost>
+EOF
+
+a2ensite "$USER.conf" "$USER-ssl.conf" 2>/dev/null
+a2dissite 000-default.conf default-ssl.conf 2>/dev/null || true
+
+# ────────────────────────────────────────────────
+# WordPress + base de données
+# ────────────────────────────────────────────────
+echo "Téléchargement et installation WordPress..."
+cd /tmp
+wget -q https://fr.wordpress.org/latest-fr_FR.zip
+unzip -q latest-fr_FR.zip
+rm latest-fr_FR.zip
+mv wordpress "/var/www/$USER"
+chown -R www-data:www-data "/var/www/$USER"
+find "/var/www/$USER" -type d -exec chmod 755 {} \;
+find "/var/www/$USER" -type f -exec chmod 644 {} \;
+
+echo "Création base MariaDB..."
+mariadb <<EOF
+CREATE DATABASE IF NOT EXISTS \`$USER\`;
+CREATE USER IF NOT EXISTS '$USER'@'localhost' IDENTIFIED BY '$PASS';
+GRANT ALL PRIVILEGES ON \`$USER\`.* TO '$USER'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+
+echo "Configuration wp-config.php..."
+cd "/var/www/$USER"
+cp wp-config-sample.php wp-config.php
+
+sed -i "s/database_name_here/$USER/" wp-config.php
+sed -i "s/username_here/$USER/"      wp-config.php
+sed -i "s/password_here/$PASS/"       wp-config.php
+
+# ────────────────────────────────────────────────
+# Mail : Exim4 + Dovecot + Roundcube
+# ────────────────────────────────────────────────
+echo "Installation serveur mail + webmail..."
+echo "exim4-config exim4/dc_eximconfig_configtype select 'internet site; mail is sent and received using SMTP'" | debconf-set-selections
+echo "exim4-config exim4/mailname string $DOMAIN"                                                                  | debconf-set-selections
+echo "exim4-config exim4/dc_other_hostnames string $DOMAIN;localhost"                                              | debconf-set-selections
+
+DEBIAN_FRONTEND=noninteractive apt install -y -qq \
+    exim4 dovecot-imapd dovecot-pop3d \
+    roundcube roundcube-mysql
+
+# Roundcube activation
+sed -i 's|# Alias /roundcube|Alias /roundcube|' /etc/apache2/conf-available/roundcube.conf 2>/dev/null || true
+a2enconf roundcube 2>/dev/null || true
+
+# SMTP localhost sans auth
+sed -i "s|\$config\['smtp_host'\].*|\$config['smtp_host'] = 'localhost';|" /etc/roundcube/config.inc.php 2>/dev/null || true
+
+# Redémarrages finaux
+systemctl restart apache2 exim4 dovecot 2>/dev/null || true
+
+# ────────────────────────────────────────────────
+# Résumé
+# ────────────────────────────────────────────────
+clear
+cat <<EOF
+──────────────────────────────────────────────────────────────
+                Installation terminée - $(date '+%Y-%m-%d %H:%M')
+──────────────────────────────────────────────────────────────
+
+Accès :
+ • WordPress     : https://$DOMAIN
+ • Roundcube     : https://$DOMAIN/roundcube
+ • phpMyAdmin    : https://$DOMAIN/phpmyadmin
+
+Identifiants :
+ • Utilisateur   : $USER
+ • Mot de passe  : $PASS
+
+Notes importantes :
+ → Certificat auto-signé → acceptez l'exception dans votre navigateur
+ → DNS local → le domaine $DOMAIN ne résout que sur cette machine (ou via /etc/hosts ailleurs)
+ → Test mail :   echo "Test" | mail -s "Test installation" $USER@$DOMAIN
+
+Bonne continuation !
+EOF
+
+exit 0
