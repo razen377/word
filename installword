@@ -2,111 +2,81 @@
 
 user="bob"
 pass="robert"
+
 useradd $user -m -s /bin/bash
 echo $user:$pass | chpasswd 2>/dev/null
 
-
-
-echo "Mise à jour et installation des paquets..."
-export DEBIAN_FRONTEND=noninteractive
-apt update && apt upgrade -y
-apt install -y apache2 mariadb-server php libapache2-mod-php php-mysql
-curl unzip bind9 exim4 dovecot-imapd roundcube phpmyadmin openssl mutt mailutils
+echo "Téléchargement et installation de la dernière version de wordpress..."
 echo
 
-
-echo "Téléchargement et installation de Wordpress..."
+# Téléchargement de wordpress français latest
 cd /tmp
 rm -f latest-fr_FR.zip
-wget -q https://fr.wordpress.org/latest-fr_FR.zip
+wget https://fr.wordpress.org/latest-fr_FR.zip
+
+# Décompression de wordpress
 unzip -q -o latest-fr_FR.zip
 
-#On renomme le dossier wordpress en wordpress_tech pour correspondre au Vhost
-mw wordpress /var/www/$user
+# Installation dans le site de l'utilisateur
+mv wordpress /var/www/$user
 
-# DEplacement dans l'itillisateur
-cd woordpress /var/www/$user
+# On se déplace dans /var/www
+cd /var/www
+# Changement propriétaire wordpress
+chown -R www-data:www-data $user/
 
-#Cahngement propriétaire wordpress
-chown -R www-data:www-data $user/ 
-
-echo "1/2 - Création du VirtualHost HTTP (Redirection)"
-cat > /etc/apache2/sites-available/$user.conf
+# Ecriture du virtual host Apache
+cat > /etc/apache2/sites-available/$user.conf << EOF
 <VirtualHost *:80>
-ServerName $user.tech.lan
-DocumentRoot /var/www/$user
-<Directory /var/www/$user>
-AllowOverride All
-Require all granted
-
-RewriteEngine On
-RewriteCond %{HTTPS} off
-RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-
+        ServerName $user.tech.lan
+        DocumentRoot /var/www/$user
+	<Directory /var/www/$user>
+		AllowOverride All
+	</Directory>
+	RewriteEngine On
+	RewriteCond %{HTTPS} off
+	RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI}
+</VirtualHost>
 EOF
 
-echo "2/2 - Création du VirtualHost HTTPS (SSL)"
-cat > /etc/apache2/sites-available/${user}-ssl.conf
+# Ecriture du virtual host SSL Apache
+cat > /etc/apache2/sites-available/${user}-ssl.conf << EOF
 <VirtualHost *:443>
-ServerName $user.tech.lan
-ServerAdmin tech@tech.lan
-DocumentRoot /var/www/$user
-<Directory /var/www/$user>
-Options Indexes FollowSymLinks
-AllowOverride All
-Require all granted
-
-SSLEngine on
-SSLCertificateFile /etc/apache2/apache.pem
-SSLCertificateKeyFile /etc/apache2/apache.key
-
+        ServerName $user.tech.lan
+        DocumentRoot /var/www/$user
+	<Directory /var/www/$user>
+		AllowOverride All
+	</Directory>
+	SSLEngine on
+	SSLCertificateFile      /etc/apache2/apache.pem
+	SSLCertificateKeyFile   /etc/apache2/apache.key
+</VirtualHost>
 EOF
-echo
 
-echo "Activation des sites et modules Apache..."
-a2enmod ssl rewrite > /dev/null
-a2ensite $user.conf ${user}-ssl.conf > /dev/null
-a2dissite 000-default.conf > /dev/null
-ln -sf /etc/roundcube/apache.conf /etc/apache2/conf-available/roundcube.conf
-a2enconf roundcube phpmyadmin > /dev/null
-echo
+# Activation des virtualhost wordpress
+a2ensite $user > /dev/null
+a2ensite ${user}-ssl > /dev/null
 
-echo "Création de la base de données MariaDB..."
-mariadb <<EOF
-CREATE DATABASE IF NOT EXISTS $user;
-CREATE USER IF NOT EXISTS ${user}@localhost IDENTIFIED BY "$pass";
-GRANT ALL PRIVILEGES ON ${user}.* TO $user@localhost;
-FLUSH PRIVILEGES;
+# Rechargement Apache
+systemctl reload apache2
+
+# Création de la base de données wordpress
+mariadb << EOF
+create database if not exists $user; 
+create user if not exists ${user}@localhost identified by "$pass";
+grant all privileges on ${user}.* to ${user}@localhost;
+flush privileges;
 EOF
-echo
 
-echo "Configuration de Wordpress avec SED..."
-cd /var/www/${user}
-cp wp-config-sample.php wp-config.php
-sed -i "s/database_name_here/${user}/" wp-config.php
-sed -i "s/username_here/${user}/" wp-config.php
-sed -i "s/password_here/${pass}/" wp-config.php
+# Remplissage du fichier wp-config.php
+cp ${user}/wp-config-sample.php ${user}/wp-config.php
+sed -i "s/database_name_here/${user}/" ${user}/wp-config.php
+sed -i "s/username_here/${user}/" ${user}/wp-config.php
+sed -i "s/password_here/${pass}/" ${user}/wp-config.php
 
-Permissions
-chown -R www-data:www-data /var/www/wordpress_tech
-chmod -R 755 /var/www/wordpress_tech
 
-Fin de l'installation et envoi du mail
-echo "📧 Envoi du mail récapitulatif..."
-
+# Fin de l'installation
 mail ${user}@tech.lan -s "Votre site Wordpress" << EOF
-L'installation de votre site wordpress est terminée et doit être finalisée sur https://${user}.tech.lan.
+L'installation de votre site wordpress est terminée et doit être finalisée sur https://${user}.jerome.lan.
 Cordialement,
-L'administrateur Tech.
 EOF
-
-echo
-echo "--------------------------------------------------------------------"
-echo " Installation terminée ! Vérifie tes mails (Mutt ou Roundcube)."
-echo "--------------------------------------------------------------------"
-
-echo "--------------------------------------------------------------------"
-echo " Installation effectuée avec succès !"
-echo "--------------------------------------------------------------------"
-echo " Accès Web : https://$user.tech.lan"
-echo "--------------------------------------------------------------------"
